@@ -1753,6 +1753,58 @@ func (s *Server) handleBridgedFlows(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleBridgeUsers returns aggregated activity per (user × bridge) for users
+// active on bridge nodes within the requested time window. Powers the
+// /bridge-users dashboard tab — shows who's currently routed through the
+// whitelist bridge (RU entry → DE exit), with their real RU client IP, top
+// destinations, device count, and Remnawave traffic info.
+//
+// Query params:
+//
+//	node   = csv of bridge node_ids (default: "ru-white"). Empty = all bridges.
+//	since  = duration window like "1h", "30m" (default "1h")
+//	limit  = max rows, 1..500 (default 100)
+func (s *Server) handleBridgeUsers(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	nodes := []string{"ru-white"}
+	if v := q.Get("node"); v != "" {
+		nodes = nodes[:0]
+		for _, p := range strings.Split(v, ",") {
+			if t := strings.TrimSpace(p); t != "" {
+				nodes = append(nodes, t)
+			}
+		}
+	}
+
+	since := time.Hour
+	if v := q.Get("since"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			since = d
+		}
+	}
+
+	limit := 100
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+
+	users, err := s.storage.GetBridgeUsers(r.Context(), nodes, since, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"count": len(users),
+		"users": users,
+		"node":  nodes,
+		"since": since.String(),
+	})
+}
+
 // handleAttackAnomalies returns only attack-type anomalies (port_scan,
 // abuse_port_flood) enriched with the resolved username — for the
 // dedicated Attacks tab in Threat Intel.

@@ -353,3 +353,130 @@ func (s *Storage) CleanupBridgedFlows(ctx context.Context, retentionDays int) er
 	_, err := s.pool.Exec(ctx, `DELETE FROM bridged_flows WHERE ts < $1`, cutoff)
 	return err
 }
+
+// BridgeUser is an aggregated view of one user's recent activity on a bridge
+// node — built for the /bridge-users dashboard tab.
+type BridgeUser struct {
+	UserUUID        string    `json:"user_uuid"`
+	Username        string    `json:"username"`           // remna_users.username (display)
+	ShortUUID       string    `json:"short_uuid"`         // remna_users.short_uuid (for sub URL)
+	TelegramID      int64     `json:"telegram_id"`        // 0 if not linked
+	Status          string    `json:"status"`             // ACTIVE / EXPIRED / DISABLED / LIMITED
+	OnlineAt        time.Time `json:"online_at"`          // last xray-tracked session start
+	BridgeNode      string    `json:"bridge_node"`        // ru-white | ru-bride
+	LastSeen        time.Time `json:"last_seen"`          // last flow on bridge
+	FlowsCount      int64     `json:"flows_count"`        // total bridged flows in window
+	LastRealIP      string    `json:"last_real_ip"`       // last real_client_ip from bridged_flows
+	UniqueDsts      int64     `json:"unique_destinations"`
+	TopDestinations []string  `json:"top_destinations"`   // top 5 dst by count
+	HWIDCount       int32     `json:"hwid_count"`         // remna devices linked
+	UsedBytes       int64     `json:"used_traffic_bytes"`
+	LimitBytes      int64     `json:"traffic_limit_bytes"`
+}
+
+// GetBridgeUsers returns users active on the given bridge nodes within `since`
+// duration, ordered by recency. `bridgeNodes` may be empty to include all bridges.
+// `limit` is capped at 500.
+func (s *Storage) GetBridgeUsers(ctx context.Context, bridgeNodes []string, since time.Duration, limit int) ([]BridgeUser, error) {
+	if since <= 0 {
+		since = time.Hour
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	cutoff := time.Now().UTC().Add(-since)
+
+	// Resolve bridge node text → smallint FK.
+	var nodeIntIDs []int16
+	for _, n := range bridgeNodes {
+		if id, err := s.LookupNodeID(ctx, n, "bridge"); err == nil {
+			nodeIntIDs = append(nodeIntIDs, int16(id))
+		}
+	}
+
+	// Main aggregate: per (user, bridge) — flows count, last seen, last real IP,
+	// unique dst count, and top destinations as a JSON array. Top dst uses
+	// `mode() WITHIN GROUP` approximation via array_agg + top-N in subquery; we
+	// just inline the top-5 as a lateral.
+	nodeFilter := ""
+	args := []interface{}{cutoff, limit}
+	if len(nodeIntIDs) > 0 {
+		nodeFilter = "AND bf.bridge_node_id = ANY($3)"
+		args = append(args, nodeIntIDs)
+	}
+
+	query := fmt.Sprintf(`
+		WITH agg AS (
+			SELECT
+				bf.user_email,
+				bf.bridge_node_id,
+				MAX(bf.ts)                                  AS last_seen,
+				COUNT(*)                                    AS flows_count,
+				COUNT(DISTINCT bf.destination)              AS unique_dsts,
+				(ARRAY_AGG(host(bf.real_client_ip) ORDER BY bf.ts DESC))[1] AS last_real_ip
+			FROM bridged_flows bf
+			WHERE bf.ts >= $1
+			%s
+			GROUP BY bf.user_email, bf.bridge_node_id
+		)
+		SELECT
+			agg.user_email,
+			COALESCE(ru.username, ei.original_email, agg.user_email::text) AS username,
+			COALESCE(ru.short_uuid, '')                                    AS short_uuid,
+			COALESCE(ru.telegram_id, 0)                                    AS telegram_id,
+			COALESCE(ru.status, '')                                        AS status,
+			COALESCE(ru.online_at, 'epoch'::timestamptz)                   AS online_at,
+			bn.node_id                                                     AS bridge_node,
+			agg.last_seen,
+			agg.flows_count,
+			COALESCE(agg.last_real_ip, '')                                 AS last_real_ip,
+			agg.unique_dsts,
+			COALESCE(ru.hwid_device_count, 0)                              AS hwid_count,
+			COALESCE(ru.used_traffic_bytes, 0)                             AS used_bytes,
+			COALESCE(ru.traffic_limit_bytes, 0)                            AS limit_bytes,
+			(
+				SELECT array_agg(d.destination ORDER BY d.cnt DESC)
+				FROM (
+					SELECT bf2.destination, COUNT(*) AS cnt
+					FROM bridged_flows bf2
+					WHERE bf2.user_email = agg.user_email
+					  AND bf2.bridge_node_id = agg.bridge_node_id
+					  AND bf2.ts >= $1
+					GROUP BY bf2.destination
+					ORDER BY cnt DESC
+					LIMIT 5
+				) d
+			) AS top_dsts
+		FROM agg
+		JOIN nodes bn          ON bn.id = agg.bridge_node_id
+		LEFT JOIN remna_users ru ON ru.uuid = agg.user_email
+		LEFT JOIN email_index ei ON ei.uuid = agg.user_email
+		ORDER BY agg.last_seen DESC
+		LIMIT $2
+	`, nodeFilter)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []BridgeUser
+	for rows.Next() {
+		var u BridgeUser
+		var userUUID uuid.UUID
+		var topDsts []string
+		if err := rows.Scan(
+			&userUUID, &u.Username, &u.ShortUUID, &u.TelegramID,
+			&u.Status, &u.OnlineAt, &u.BridgeNode, &u.LastSeen,
+			&u.FlowsCount, &u.LastRealIP, &u.UniqueDsts,
+			&u.HWIDCount, &u.UsedBytes, &u.LimitBytes, &topDsts,
+		); err != nil {
+			return nil, err
+		}
+		u.UserUUID = userUUID.String()
+		u.TopDestinations = topDsts
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
