@@ -1,5 +1,7 @@
 # Xray Log Analyzer
 
+**Языки:** **Русский** · [English](./README.en.md)
+
 Real-time analytics для Xray-core access logs c интеграцией с Remnawave panel. Собирает access logs со всех VPN-нод через WebSocket-агентов, агрегирует в Postgres, детектит abuse/threat-traffic, рисует дашборд.
 
 > 📦 **Установка по шагам:** [INSTALL.md](./INSTALL.md) — production-ready гайд для server + agents + reverse-proxy.

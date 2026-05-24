@@ -1,5 +1,7 @@
 # Установка Xray Log Analyzer — пошагово
 
+**Языки:** **Русский** · [English](./INSTALL.en.md)
+
 Полный гайд для production-деплоя. Сервер + агенты + reverse-proxy + интеграции.
 
 ## Что мы строим
