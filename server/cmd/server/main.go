@@ -50,7 +50,6 @@ func main() {
 	// Start partition manager — creates today+2 future partitions and drops
 	// expired ones on startup, then re-runs every 6 hours.
 	pm := partitions.NewManager(store.Pool(), []partitions.Table{
-		{Name: "bridged_flows", RetentionDays: 14},
 		{Name: "alerts", RetentionDays: 30},
 		{Name: "blacklist_matches", RetentionDays: 30},
 		{Name: "threat_matches", RetentionDays: 30},
@@ -111,16 +110,6 @@ func main() {
 		cfg.SuspiciousRequestCount,
 		cfg.SuspiciousTimeWindow,
 	)
-	if err := anal.SetBridgeInboundPattern(cfg.BridgeInboundPattern); err != nil {
-		log.Fatalf("invalid BRIDGE_INBOUND_PATTERN %q: %v", cfg.BridgeInboundPattern, err)
-	}
-	if cfg.BridgeInboundPattern != "" {
-		log.Printf("analyzer: bridge inbound filter active: %q", cfg.BridgeInboundPattern)
-	}
-	if len(cfg.BridgeNodeIDs) > 0 {
-		anal.SetBridgeCorrelation(cfg.BridgeNodeIDs, cfg.BridgeCorrelationWindow)
-		log.Printf("analyzer: bridge correlation active: nodes=%v window=%s", cfg.BridgeNodeIDs, cfg.BridgeCorrelationWindow)
-	}
 
 	// Initialize IP info service for geo lookups
 	ipInfoSvc := ipinfo.NewService()
