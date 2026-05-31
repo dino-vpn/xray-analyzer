@@ -168,16 +168,24 @@ func (a *Analyzer) ProcessBatch(ctx context.Context, batch *models.LogBatch) (pr
 			a.checkAndAlert(ctx, batch.NodeID, entry, matchedRule)
 		}
 
-		// Check threat intelligence (only if not already blocked by blacklist)
+		// Check threat intelligence (only if not already blocked by blacklist).
+		// Matches are accumulated and persisted once per batch (see below) so the
+		// per-match stat upserts collapse into aggregated writes.
 		if matchedRule == "" && a.threatIntel != nil {
-			if threatMatch := a.threatIntel.CheckAndRecord(ctx, entry.UserEmail, batch.NodeID, entry.SourceIP, entry.Destination); threatMatch != nil {
+			if threatMatch := a.threatIntel.Check(entry.UserEmail, batch.NodeID, entry.SourceIP, entry.Destination); threatMatch != nil {
 				threatHits++
+				threatMatches = append(threatMatches, threatMatch)
 				// Generate alert for high confidence threats
 				if threatMatch.Confidence >= 80 {
 					a.generateThreatAlert(ctx, batch.NodeID, entry, threatMatch)
 				}
 			}
 		}
+	}
+
+	// Flush accumulated threat matches as one aggregated batch.
+	if a.threatIntel != nil && len(threatMatches) > 0 {
+		a.threatIntel.RecordMatches(ctx, threatMatches)
 	}
 
 	// Update aggregated stats
