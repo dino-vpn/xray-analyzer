@@ -16,9 +16,16 @@ import (
 // by the reported total, and paces between pages to avoid hammering the API.
 func (c *Client) GetUsers(ctx context.Context) (*UsersResponse, error) {
 	const (
-		pageSize    = 1000
-		maxAttempts = 3
-		pagePause   = 200 * time.Millisecond
+		pageSize  = 1000
+		pagePause = 200 * time.Millisecond
+
+		// Per-page retry tuning. The panel intermittently returns 500/A024
+		// ("Get all users error") on deep offsets; instead of giving up after
+		// a fixed number of tries we keep retrying with exponential backoff
+		// until the total retry budget for that page is spent.
+		retryInitialBackoff = 1 * time.Second
+		retryMaxBackoff     = 30 * time.Second
+		retryBudget         = 5 * time.Minute
 	)
 
 	var allUsers []User
@@ -32,7 +39,9 @@ func (c *Client) GetUsers(ctx context.Context) (*UsersResponse, error) {
 
 		var resp *UsersResponse
 		var lastErr error
-		for attempt := 0; attempt < maxAttempts; attempt++ {
+		deadline := time.Now().Add(retryBudget)
+		backoff := retryInitialBackoff
+		for attempt := 1; ; attempt++ {
 			endpoint := fmt.Sprintf("/api/users?start=%d&size=%d", start, pageSize)
 			data, err := c.doRequest(ctx, "GET", endpoint, nil)
 			if err == nil {
@@ -43,10 +52,26 @@ func (c *Client) GetUsers(ctx context.Context) (*UsersResponse, error) {
 			} else {
 				lastErr = err
 			}
+
+			// Stop if the next wait would push us past the retry budget.
+			now := time.Now()
+			if !now.Add(backoff).Before(deadline) {
+				break
+			}
+
+			log.Printf("[remnawave] users page start=%d attempt %d failed: %v, retrying in %v (budget %v left)",
+				start, attempt, lastErr, backoff, deadline.Sub(now).Round(time.Second))
+
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(time.Duration(attempt+1) * 500 * time.Millisecond):
+			case <-time.After(backoff):
+			}
+
+			// Exponential growth, capped.
+			backoff *= 2
+			if backoff > retryMaxBackoff {
+				backoff = retryMaxBackoff
 			}
 		}
 
@@ -56,8 +81,8 @@ func (c *Client) GetUsers(ctx context.Context) (*UsersResponse, error) {
 			if total < 0 {
 				return nil, fmt.Errorf("users first page failed: %w", lastErr)
 			}
-			log.Printf("[remnawave] users page start=%d failed after %d attempts, skipping: %v",
-				start, maxAttempts, lastErr)
+			log.Printf("[remnawave] users page start=%d giving up after retry budget %v, skipping: %v",
+				start, retryBudget, lastErr)
 			start += pageSize
 			continue
 		}
