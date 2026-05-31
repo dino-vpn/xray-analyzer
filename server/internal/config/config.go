@@ -24,6 +24,12 @@ type Config struct {
 	BlacklistReload    time.Duration
 	BlacklistRemoteURL string // URL to fetch additional blocked domains
 
+	// ThreatIntelEnabled gates the threat-intelligence feeds (malware/crypto/
+	// phishing/… from BlockList Project etc.). When false the feeds are not
+	// fetched and no threat alerts are produced — only the curated blacklist
+	// drives alerts. Default true for backward compatibility.
+	ThreatIntelEnabled bool
+
 	// Telegram settings
 	TelegramEnabled bool
 	TelegramToken   string
@@ -100,6 +106,7 @@ func Load() *Config {
 		BlacklistPath:          getEnv("BLACKLIST_PATH", "./blacklist.txt"),
 		BlacklistReload:        getDurationEnv("BLACKLIST_RELOAD", 5*time.Minute),
 		BlacklistRemoteURL:     getEnv("BLACKLIST_REMOTE_URL", ""),
+		ThreatIntelEnabled:     getBoolEnv("THREATINTEL_ENABLED", true),
 		TelegramEnabled:        getBoolEnv("TELEGRAM_ENABLED", false),
 		TelegramToken:          getEnv("TELEGRAM_TOKEN", ""),
 		TelegramChatID:         getEnv("TELEGRAM_CHAT_ID", ""),

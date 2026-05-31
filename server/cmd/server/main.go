@@ -126,13 +126,21 @@ func main() {
 	ipInfoSvc := ipinfo.NewService()
 	anal.SetIPInfo(ipInfoSvc)
 
-	// Initialize threat intelligence service
-	threatIntelSvc := threatintel.NewService(store, ipInfoSvc)
-	if err := threatIntelSvc.Start(ctx); err != nil {
-		log.Printf("threatintel: failed to start (continuing without): %v", err)
+	// Initialize threat intelligence service (gated by THREATINTEL_ENABLED).
+	// When disabled we skip feed loading entirely so no threat alerts fire and
+	// only the curated blacklist drives alerts. threatIntelSvc stays nil, which
+	// every consumer (analyzer, server handlers, websocket) already guards.
+	var threatIntelSvc *threatintel.Service
+	if cfg.ThreatIntelEnabled {
+		threatIntelSvc = threatintel.NewService(store, ipInfoSvc)
+		if err := threatIntelSvc.Start(ctx); err != nil {
+			log.Printf("threatintel: failed to start (continuing without): %v", err)
+		} else {
+			anal.SetThreatIntel(threatIntelSvc)
+			log.Printf("threatintel: started with %d indicators", threatIntelSvc.GetIndicatorCount())
+		}
 	} else {
-		anal.SetThreatIntel(threatIntelSvc)
-		log.Printf("threatintel: started with %d indicators", threatIntelSvc.GetIndicatorCount())
+		log.Println("threatintel: disabled (THREATINTEL_ENABLED=false)")
 	}
 
 	// Initialize Telegram bot if enabled
@@ -329,8 +337,10 @@ func main() {
 	log.Println("shutting down...")
 	cancel()
 
-	// Stop threat intelligence service
-	threatIntelSvc.Stop()
+	// Stop threat intelligence service (nil when THREATINTEL_ENABLED=false)
+	if threatIntelSvc != nil {
+		threatIntelSvc.Stop()
+	}
 
 	// Give goroutines time to cleanup
 	time.Sleep(2 * time.Second)
