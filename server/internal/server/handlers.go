@@ -1846,16 +1846,32 @@ func (s *Server) handleAttackAnomalies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve numeric user_email → Remnawave username for the UI.
+	// Resolve user_email (Remnawave UUID) → username for the UI. Anomalies are
+	// keyed by UUID, so resolve straight from remna_users (authoritative,
+	// populated on-demand) in one batch query; fall back to the in-memory
+	// resolver only for ids the DB doesn't know.
+	ids := make([]string, 0, len(anomalies))
+	for _, a := range anomalies {
+		if a.UserEmail != "" {
+			ids = append(ids, a.UserEmail)
+		}
+	}
+	nameByID, err := s.storage.ResolveUUIDUsernames(r.Context(), ids)
+	if err != nil {
+		nameByID = map[string]string{}
+	}
+
 	type enriched struct {
 		*threatintel.Anomaly
 		Username string `json:"username,omitempty"`
 	}
 	out := make([]enriched, 0, len(anomalies))
 	for _, a := range anomalies {
-		username := ""
-		if s.remnawave != nil && a.UserEmail != "" {
-			username = s.remnawave.ResolveUsername(r.Context(), a.UserEmail)
+		username := nameByID[a.UserEmail]
+		if username == "" && s.remnawave != nil && a.UserEmail != "" {
+			if resolved := s.remnawave.ResolveUsername(r.Context(), a.UserEmail); resolved != a.UserEmail {
+				username = resolved
+			}
 		}
 		out = append(out, enriched{Anomaly: a, Username: username})
 	}

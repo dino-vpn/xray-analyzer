@@ -7,6 +7,52 @@ import (
 	"github.com/google/uuid"
 )
 
+// ResolveUUIDUsernames batch-resolves Remnawave UUIDs to usernames straight
+// from remna_users. The dashboard's in-memory resolver only knows users loaded
+// into the (now-throttled) full sync, so UUID-keyed rows like anomalies showed
+// the raw UUID when the user wasn't cached. remna_users is authoritative and
+// gets populated on-demand, so a direct DB lookup resolves everyone present.
+// Non-UUID / unknown ids are simply absent from the returned map.
+func (s *Storage) ResolveUUIDUsernames(ctx context.Context, ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	// Keep only well-formed UUIDs so the ::uuid[] cast can't error on a stray
+	// hash/numeric id.
+	valid := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if _, err := uuid.Parse(id); err == nil {
+			valid = append(valid, id)
+		}
+	}
+	if len(valid) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT uuid::text, username
+		FROM remna_users
+		WHERE uuid = ANY($1::uuid[]) AND username <> ''
+	`, valid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, username string
+		if err := rows.Scan(&id, &username); err != nil {
+			continue
+		}
+		out[id] = username
+	}
+	return out, rows.Err()
+}
+
 // UserResolver resolves a numeric xray-email id (e.g. "791947") to a Remnawave
 // user UUID on demand, fetching from the panel and persisting into remna_users
 // when the id isn't cached. Implemented by *remnawave.SyncService and wired in
