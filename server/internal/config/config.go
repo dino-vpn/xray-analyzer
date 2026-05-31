@@ -28,6 +28,14 @@ type Config struct {
 	TelegramEnabled bool
 	TelegramToken   string
 	TelegramChatID  string
+	// TelegramTopics routes alert categories to Telegram forum topics
+	// (message_thread_id) inside the chat. Format: "category=threadid" pairs,
+	// e.g. "threat=12,blacklist=34,scan=56". Categories: see models.AlertCategory*.
+	// Empty = all alerts go to one chat (no topic routing).
+	TelegramTopics map[string]int
+	// TelegramDefaultTopic is the forum topic id used for alerts whose category
+	// has no explicit mapping (and for the startup test message). 0 = General.
+	TelegramDefaultTopic int
 
 	// Thresholds
 	SuspiciousRequestCount int           // Requests to blacklisted sites to trigger alert
@@ -95,6 +103,8 @@ func Load() *Config {
 		TelegramEnabled:        getBoolEnv("TELEGRAM_ENABLED", false),
 		TelegramToken:          getEnv("TELEGRAM_TOKEN", ""),
 		TelegramChatID:         getEnv("TELEGRAM_CHAT_ID", ""),
+		TelegramTopics:         getIntMapEnv("TELEGRAM_TOPICS", nil),
+		TelegramDefaultTopic:   getIntEnv("TELEGRAM_DEFAULT_TOPIC", 0),
 		SuspiciousRequestCount: getIntEnv("SUSPICIOUS_REQUEST_COUNT", 5),
 		SuspiciousTimeWindow:   getDurationEnv("SUSPICIOUS_TIME_WINDOW", 1*time.Hour),
 		RemnawaveEnabled:       getBoolEnv("REMNAWAVE_ENABLED", false),
@@ -142,6 +152,31 @@ func getMapEnv(key string, defaultValue map[string]string) map[string]string {
 		k := strings.TrimSpace(kv[0])
 		v := strings.TrimSpace(kv[1])
 		if k != "" && v != "" {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return defaultValue
+	}
+	return out
+}
+
+// getIntMapEnv parses a "k1=v1,k2=v2" env var into a map[string]int, skipping
+// pairs whose value is not a valid integer.
+func getIntMapEnv(key string, defaultValue map[string]int) map[string]int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return defaultValue
+	}
+	out := make(map[string]int)
+	for _, pair := range strings.Split(raw, ",") {
+		kv := strings.SplitN(strings.TrimSpace(pair), "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		k := strings.TrimSpace(kv[0])
+		v, err := strconv.Atoi(strings.TrimSpace(kv[1]))
+		if k != "" && err == nil {
 			out[k] = v
 		}
 	}

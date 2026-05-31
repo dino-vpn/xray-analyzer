@@ -137,7 +137,7 @@ func main() {
 
 	// Initialize Telegram bot if enabled
 	if cfg.TelegramEnabled && cfg.TelegramToken != "" && cfg.TelegramChatID != "" {
-		bot := telegram.New(cfg.TelegramToken, cfg.TelegramChatID, alertCh)
+		bot := telegram.New(cfg.TelegramToken, cfg.TelegramChatID, cfg.TelegramTopics, cfg.TelegramDefaultTopic, alertCh)
 		go bot.Start(ctx)
 
 		// Send test message

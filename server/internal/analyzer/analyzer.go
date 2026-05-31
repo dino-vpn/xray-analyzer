@@ -363,6 +363,7 @@ func (a *Analyzer) checkAndAlert(ctx context.Context, nodeID string, entry model
 	if count >= a.suspiciousCount {
 		alert := &models.Alert{
 			Type:        "blacklist_threshold",
+			Category:    models.AlertCategoryBlacklist,
 			NodeID:      nodeID,
 			UserEmail:   entry.UserEmail,
 			SourceIP:    entry.SourceIP,
@@ -437,6 +438,7 @@ func (a *Analyzer) generateThreatAlert(ctx context.Context, nodeID string, entry
 
 	alert := &models.Alert{
 		Type:        "threat_intel",
+		Category:    models.AlertCategoryThreat,
 		NodeID:      nodeID,
 		UserEmail:   entry.UserEmail,
 		SourceIP:    entry.SourceIP,
