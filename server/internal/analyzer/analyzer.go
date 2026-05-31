@@ -232,14 +232,14 @@ func (a *Analyzer) ProcessBatch(ctx context.Context, batch *models.LogBatch) (pr
 			// UserAgent is not in LogEntry, so we pass empty string
 			a.correlation.ProcessConnection(ctx, user, lastIP, "", "", batch.NodeID)
 		}
-	}
 
-	// Record user destinations for the whole batch in one chunked multi-row
-	// upsert instead of one INSERT per destination — this was the dominant
-	// postgres CPU consumer under load.
-	if err := a.storage.SaveUserDestinationsBatch(ctx, batch.NodeID, userDestinations); err != nil {
-		// log.Printf("analyzer: failed to record user destinations: %v", err)
-		_ = err
+		// Record user destinations for detailed tracking
+		for dest := range userDestinations[user] {
+			if err := a.storage.RecordUserDestination(ctx, user, batch.NodeID, dest); err != nil {
+				// log.Printf("analyzer: failed to record user destination: %v", err)
+				_ = err
+			}
+		}
 	}
 
 	// Update unique users count for this node
