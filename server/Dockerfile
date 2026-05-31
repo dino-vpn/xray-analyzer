@@ -1,21 +1,28 @@
+# syntax=docker/dockerfile:1
+
 # Build stage for Go backend
 FROM golang:1.25-alpine AS go-builder
 
 WORKDIR /app
 
-# Install dependencies
-RUN apk add --no-cache git gcc musl-dev
+# git is needed by the module proxy for some VCS deps; CGO is disabled below,
+# so no C toolchain (gcc/musl-dev) is required.
+RUN apk add --no-cache git
 
-# Copy go mod files
-COPY go.mod ./
+# Download modules first. This layer is cached (and reused across CI runs via the
+# GHA layer cache) until go.mod/go.sum change, so deps aren't re-fetched on every
+# source edit. Modules are baked into the layer at /go/pkg/mod.
+COPY go.mod go.sum ./
 RUN go mod download
 
 # Copy source code (exclude web folder). No top-level *.go in this layout.
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 
-# Generate go.sum and build
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /server ./cmd/server
+# Build. The Go build cache is mounted so the dependency tree isn't recompiled
+# from scratch on local rebuilds.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /server ./cmd/server
 
 # Build stage for Next.js frontend
 FROM node:20-alpine AS web-builder

@@ -1,0 +1,17 @@
+# Keep the build context small and cache-stable.
+.git
+.gitignore
+*.md
+
+# Local databases / runtime data
+*.db
+*.db-*
+data/
+
+# Frontend deps and build output — rebuilt inside the image
+web/node_modules
+web/.next
+web/out
+
+# Test files aren't needed for the production build
+**/*_test.go
