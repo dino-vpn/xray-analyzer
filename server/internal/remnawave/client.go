@@ -83,6 +83,44 @@ func (c *Client) doRequest(ctx context.Context, method, endpoint string, body io
 	return data, nil
 }
 
+// doRequestStatus is like doRequest but accepts any 2xx status (200/201/204).
+// Mutating endpoints (disable/delete user) may answer 201/204, which the
+// 200-only doRequest would reject. Returns the raw body (possibly empty).
+func (c *Client) doRequestStatus(ctx context.Context, method, endpoint string, body io.Reader) ([]byte, error) {
+	c.mu.RLock()
+	baseURL := c.baseURL
+	token := c.apiToken
+	c.mu.RUnlock()
+
+	if baseURL == "" || token == "" {
+		return nil, fmt.Errorf("remnawave client not configured")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+endpoint, body)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("api error: status %d, body: %s", resp.StatusCode, string(data))
+	}
+	return data, nil
+}
+
 // parseResponse extracts the "response" field from API response
 func parseResponse[T any](data []byte) (T, error) {
 	var wrapper struct {

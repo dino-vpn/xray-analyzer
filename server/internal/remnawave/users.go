@@ -147,3 +147,29 @@ func (c *Client) GetUserByID(ctx context.Context, id string) (*User, error) {
 	}
 	return parseResponse[*User](data)
 }
+
+// DisableUser disables a user on the Remnawave panel (status → DISABLED).
+// The exact path tracks the Remnawave panel API; adjust if the panel version
+// differs. Uses doRequestStatus since the panel may answer 200/201.
+func (c *Client) DisableUser(ctx context.Context, uuid string) error {
+	endpoint := fmt.Sprintf("/api/users/%s/actions/disable", uuid)
+	data, err := c.doRequestStatus(ctx, "POST", endpoint, nil)
+	if err != nil {
+		log.Printf("[remnawave-client] DISABLE user %s - error: %v", uuid, err)
+		return err
+	}
+	log.Printf("[remnawave-client] DISABLE user %s - ok: %s", uuid, string(data))
+	return nil
+}
+
+// DeleteUser permanently deletes a user on the Remnawave panel.
+func (c *Client) DeleteUser(ctx context.Context, uuid string) error {
+	endpoint := fmt.Sprintf("/api/users/%s", uuid)
+	data, err := c.doRequestStatus(ctx, "DELETE", endpoint, nil)
+	if err != nil {
+		log.Printf("[remnawave-client] DELETE user %s - error: %v", uuid, err)
+		return err
+	}
+	log.Printf("[remnawave-client] DELETE user %s - ok: %s", uuid, string(data))
+	return nil
+}

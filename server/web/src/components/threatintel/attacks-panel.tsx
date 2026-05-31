@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Swords, RefreshCw, Target, Crosshair, Check, Copy, ChevronRight, ChevronDown, Server } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { StatCard, StatCardGrid } from "./stat-card";
+import { EnforcementDrill } from "./enforcement-drill";
 
 // Incident = one attack detection. Shape mirrors /api/threatintel/attacks.
 type AttackDetails = {
@@ -376,6 +377,9 @@ export function AttacksPanel() {
                           <TableRow className="hover:bg-transparent">
                             <TableCell colSpan={6} className="bg-muted/30 p-0">
                               <DestinationsDrill state={d} onRetry={() => loadDestinations(a)} />
+                              <div className="border-t">
+                                <EnforcementDrill userEmail={a.user_email} />
+                              </div>
                             </TableCell>
                           </TableRow>
                         )}

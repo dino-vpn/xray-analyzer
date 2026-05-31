@@ -13,6 +13,7 @@ import (
 	"github.com/xray-log-analyzer/server/internal/analyzer"
 	"github.com/xray-log-analyzer/server/internal/blacklist"
 	"github.com/xray-log-analyzer/server/internal/correlation"
+	"github.com/xray-log-analyzer/server/internal/crowdsec"
 	"github.com/xray-log-analyzer/server/internal/ipinfo"
 	"github.com/xray-log-analyzer/server/internal/rediscache"
 	"github.com/xray-log-analyzer/server/internal/remnawave"
@@ -32,6 +33,7 @@ type Server struct {
 	blacklist      *blacklist.Blacklist
 	threatIntel    *threatintel.Service
 	remnawave      *remnawave.SyncService
+	crowdsec       *crowdsec.Client
 	correlation    *correlation.Service
 	ipInfo         *ipinfo.Service
 	aleria         *aleria.Service
@@ -101,6 +103,11 @@ func (s *Server) SetThreatIntel(ti *threatintel.Service) {
 // SetRemnawave sets the Remnawave sync service
 func (s *Server) SetRemnawave(rw *remnawave.SyncService) {
 	s.remnawave = rw
+}
+
+// SetCrowdSec sets the CrowdSec LAPI client used for IP bans.
+func (s *Server) SetCrowdSec(c *crowdsec.Client) {
+	s.crowdsec = c
 }
 
 // SetCorrelation sets the correlation service
@@ -221,6 +228,14 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/threatintel/anomalies", s.cached(30*time.Second, s.requireAPIToken(s.handleThreatIntelAnomalies)))
 	mux.HandleFunc("/api/threatintel/attacks", s.cached(30*time.Second, s.requireAPIToken(s.handleAttackAnomalies)))
 	mux.HandleFunc("/api/threatintel/attacks/destinations", s.cached(30*time.Second, s.requireAPIToken(s.handleAttackDestinations)))
+	// Per-user detection history + enforcement (Remnawave disable/delete, CrowdSec IP ban).
+	// Detections is uncached so it reflects bans/actions immediately after they run.
+	mux.HandleFunc("/api/threatintel/detections", s.requireAPIToken(s.handleUserDetections))
+	mux.HandleFunc("/api/enforcement/actions", s.requireAPIToken(s.handleEnforcementActions))
+	mux.HandleFunc("/api/enforcement/remnawave/disable", s.requireAPIToken(s.handleRemnawaveDisable))
+	mux.HandleFunc("/api/enforcement/remnawave/delete", s.requireAPIToken(s.handleRemnawaveDelete))
+	mux.HandleFunc("/api/enforcement/ip-ban", s.requireAPIToken(s.handleIPBan))
+	mux.HandleFunc("/api/enforcement/ip-unban", s.requireAPIToken(s.handleIPUnban))
 	mux.HandleFunc("/api/threatintel/risk-profiles", s.cached(60*time.Second, s.requireAPIToken(s.handleUserRiskProfiles)))
 	mux.HandleFunc("/api/threatintel/dns-analysis", s.cached(60*time.Second, s.requireAPIToken(s.handleDNSAnalysis)))
 	mux.HandleFunc("/api/threatintel/reports", s.cached(120*time.Second, s.requireAPIToken(s.handleReports)))

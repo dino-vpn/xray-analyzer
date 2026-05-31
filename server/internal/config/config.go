@@ -57,6 +57,17 @@ type Config struct {
 	// numeric ids are resolved on-demand between full sweeps instead.
 	RemnawaveFullSyncInterval time.Duration
 
+	// CrowdSec LAPI settings — used by the Attacks tab to ban a user's source
+	// IP centrally (the same CrowdSec instance the ansible repo deploys at
+	// crowd.devaleto.com). Adding decisions needs a *machine* credential
+	// (watcher), not a bouncer key. Empty MachineID/Password = banning is
+	// disabled and the UI hides the IP-ban controls.
+	CrowdSecEnabled    bool
+	CrowdSecURL        string        // e.g. https://crowd.devaleto.com
+	CrowdSecMachineID  string        // cscli machines add <id>
+	CrowdSecPassword   string        // machine password
+	CrowdSecDefaultBan time.Duration // default ban preset (30m)
+
 	// AI assistant settings — OpenAI-compatible chat-completions endpoint.
 	// Works with OpenAI, Aleria, Together, OpenRouter, local llama.cpp/vLLM.
 	OpenAIAPIKey  string
@@ -101,6 +112,11 @@ func Load() *Config {
 		RemnawaveAPIToken:      getEnv("REMNAWAVE_API_TOKEN", ""),
 		RemnawaveSyncInterval:     getDurationEnv("REMNAWAVE_SYNC_INTERVAL", 1*time.Minute),      // light node sync (online stats)
 		RemnawaveFullSyncInterval: getDurationEnv("REMNAWAVE_FULL_SYNC_INTERVAL", 6*time.Hour), // heavy full user+hwid sweep
+		CrowdSecEnabled:           getBoolEnv("CROWDSEC_ENABLED", false),
+		CrowdSecURL:               getEnv("CROWDSEC_URL", ""),
+		CrowdSecMachineID:         getEnv("CROWDSEC_MACHINE_ID", ""),
+		CrowdSecPassword:          getEnv("CROWDSEC_PASSWORD", ""),
+		CrowdSecDefaultBan:        getDurationEnv("CROWDSEC_DEFAULT_BAN", 30*time.Minute),
 		// OPENAI_* are the canonical env names; ALERIA_API_KEY is kept as
 		// a back-compat fallback so existing deployments don't break.
 		OpenAIAPIKey:           getEnv("OPENAI_API_KEY", getEnv("ALERIA_API_KEY", "")),

@@ -680,6 +680,35 @@ func (s *SyncService) ClearUserHwidDevices(ctx context.Context, userUUID string)
 	return nil
 }
 
+// IsConfigured reports whether the underlying client has credentials.
+func (s *SyncService) IsConfigured() bool {
+	return s.client != nil && s.client.IsConfigured()
+}
+
+// DisableUser disables a user on the Remnawave panel via the API.
+func (s *SyncService) DisableUser(ctx context.Context, userUUID string) error {
+	if s.client == nil || !s.client.IsConfigured() {
+		return fmt.Errorf("remnawave client not configured")
+	}
+	if err := s.client.DisableUser(ctx, userUUID); err != nil {
+		return err
+	}
+	log.Printf("[remnawave] disabled user %s", userUUID)
+	return nil
+}
+
+// DeleteUser permanently deletes a user on the Remnawave panel via the API.
+func (s *SyncService) DeleteUser(ctx context.Context, userUUID string) error {
+	if s.client == nil || !s.client.IsConfigured() {
+		return fmt.Errorf("remnawave client not configured")
+	}
+	if err := s.client.DeleteUser(ctx, userUUID); err != nil {
+		return err
+	}
+	log.Printf("[remnawave] deleted user %s", userUUID)
+	return nil
+}
+
 // GetAllUsers returns all cached users
 func (s *SyncService) GetAllUsers() []*User {
 	s.mu.RLock()

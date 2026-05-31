@@ -15,6 +15,7 @@ import (
 	"github.com/xray-log-analyzer/server/internal/blacklist"
 	"github.com/xray-log-analyzer/server/internal/config"
 	"github.com/xray-log-analyzer/server/internal/correlation"
+	"github.com/xray-log-analyzer/server/internal/crowdsec"
 	"github.com/xray-log-analyzer/server/internal/ipinfo"
 	"github.com/xray-log-analyzer/server/internal/models"
 	"github.com/xray-log-analyzer/server/internal/rediscache"
@@ -223,6 +224,15 @@ func main() {
 		log.Printf("remnawave: enabled, node sync: %v, full sync: %v, storage: enabled", cfg.RemnawaveSyncInterval, cfg.RemnawaveFullSyncInterval)
 	} else {
 		log.Println("remnawave: disabled (no URL/token configured)")
+	}
+
+	// Initialize CrowdSec LAPI client for centralized IP bans (Attacks tab).
+	if cfg.CrowdSecEnabled && cfg.CrowdSecURL != "" && cfg.CrowdSecMachineID != "" && cfg.CrowdSecPassword != "" {
+		csClient := crowdsec.NewClient(cfg.CrowdSecURL, cfg.CrowdSecMachineID, cfg.CrowdSecPassword)
+		srv.SetCrowdSec(csClient)
+		log.Printf("crowdsec: enabled, LAPI: %s, default ban: %v", cfg.CrowdSecURL, cfg.CrowdSecDefaultBan)
+	} else {
+		log.Println("crowdsec: disabled (no URL/machine credentials configured)")
 	}
 
 	// Initial cache warm-up

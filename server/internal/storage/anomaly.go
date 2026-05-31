@@ -578,6 +578,39 @@ func (s *Storage) GetAttackAnomalies(ctx context.Context, types []string, since 
 	return scanAnomalies(pgRows)
 }
 
+// GetAnomaliesByUser returns all anomalies for a single user within `since`,
+// regardless of type (used by the per-user detection history in the Attacks
+// tab). Includes resolved ones so the timeline is complete. Named distinctly
+// from the legacy GetUserAnomalies(ctx, limit) in users.go.
+func (s *Storage) GetAnomaliesByUser(ctx context.Context, userEmail string, since time.Duration, limit int) ([]*threatintel.Anomaly, error) {
+	uid, err := uuid.Parse(userEmail)
+	if err != nil {
+		return nil, nil // non-UUID user, no results
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	if since <= 0 {
+		since = 30 * 24 * time.Hour
+	}
+	threshold := time.Now().Add(-since).UTC()
+
+	pgRows, err := s.pool.Query(ctx, `
+		SELECT id, type, severity, user_email, description, details, detected_at, resolved
+		FROM anomalies
+		WHERE user_email = $1
+		  AND detected_at >= $2
+		ORDER BY detected_at DESC
+		LIMIT $3
+	`, uid, threshold, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer pgRows.Close()
+
+	return scanAnomalies(pgRows)
+}
+
 // benignHighVolumePorts are ports where a single user legitimately touches
 // many distinct IPs in normal operation.
 var benignHighVolumePorts = []string{
