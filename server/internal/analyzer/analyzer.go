@@ -122,6 +122,7 @@ func (a *Analyzer) ProcessBatch(ctx context.Context, batch *models.LogBatch) (pr
 	userLastIP := make(map[string]string)                // user -> last source IP
 	userDestinations := make(map[string]map[string]bool) // user -> set of destinations
 	threatHits := 0
+	var threatMatches []*threatintel.ThreatMatch
 
 	for _, entry := range batch.Entries {
 		processed++
