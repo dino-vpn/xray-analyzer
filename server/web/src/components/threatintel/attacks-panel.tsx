@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { authFetch } from "@/contexts/auth-context";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,8 +16,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Swords, RefreshCw, Target, Crosshair, Check } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { Swords, RefreshCw, Target, Crosshair, Check, Copy, ChevronRight, ChevronDown, Server } from "lucide-react";
+import { formatDistanceToNow, format } from "date-fns";
 import { StatCard, StatCardGrid } from "./stat-card";
 
 // Incident = one attack detection. Shape mirrors /api/threatintel/attacks.
@@ -41,6 +41,17 @@ type Attack = {
   resolved: boolean;
 };
 
+// One concrete destination behind an attack. Mirrors /api/threatintel/attacks/destinations.
+type DestRow = {
+  node_id: string;
+  destination: string;
+  request_count: number;
+  first_seen: string;
+  last_seen: string;
+};
+
+type DrillState = { loading: boolean; error?: boolean; rows?: DestRow[] };
+
 const severityBadge: Record<string, string> = {
   low: "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30",
   medium: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
@@ -61,11 +72,48 @@ const SINCE_OPTIONS = [
   { value: "7d", label: "7 days" },
 ];
 
+// fmtTs renders an absolute UTC-local timestamp for forensic copy/paste.
+function fmtTs(iso: string): string {
+  try {
+    return format(new Date(iso), "yyyy-MM-dd HH:mm:ss");
+  } catch {
+    return iso;
+  }
+}
+
+// CopyButton copies `text` to the clipboard and flips to a checkmark briefly.
+function CopyButton({ text, label, className }: { text: string; label?: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className={`h-6 gap-1 px-1.5 text-xs ${className ?? ""}`}
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        } catch {
+          /* clipboard unavailable (insecure context) — ignore */
+        }
+      }}
+    >
+      {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+      {label}
+    </Button>
+  );
+}
+
 export function AttacksPanel() {
   const [since, setSince] = useState("24h");
   const [attacks, setAttacks] = useState<Attack[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [resolvingIds, setResolvingIds] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [drill, setDrill] = useState<Record<string, DrillState>>({});
 
   const fetchAttacks = useCallback(async () => {
     setLoading(true);
@@ -91,6 +139,44 @@ export function AttacksPanel() {
     const t = setInterval(fetchAttacks, 60_000);
     return () => clearInterval(t);
   }, [fetchAttacks]);
+
+  // loadDestinations fetches the per-destination breakdown for one attack and
+  // stores it in `drill`. Shared by the expand handler and the retry button.
+  const loadDestinations = useCallback(async (a: Attack) => {
+    setDrill((p) => ({ ...p, [a.id]: { loading: true } }));
+    try {
+      const d = (a.details ?? {}) as AttackDetails;
+      const params = new URLSearchParams({ user_email: a.user_email, detected_at: a.detected_at });
+      if (d.port) params.set("port", String(d.port));
+      if (d.target_subnet) params.set("subnet", String(d.target_subnet));
+      if (d.window_minutes) params.set("window", String(d.window_minutes));
+      const res = await authFetch(`/api/threatintel/attacks/destinations?${params.toString()}`);
+      if (!res.ok) {
+        setDrill((p) => ({ ...p, [a.id]: { loading: false, error: true } }));
+        return;
+      }
+      const json = await res.json();
+      setDrill((p) => ({ ...p, [a.id]: { loading: false, rows: json.destinations || [] } }));
+    } catch {
+      setDrill((p) => ({ ...p, [a.id]: { loading: false, error: true } }));
+    }
+  }, []);
+
+  // toggleRow expands/collapses the per-destination drill-down for one attack,
+  // lazily fetching the destinations the first time the row is opened.
+  const toggleRow = useCallback(
+    (a: Attack) => {
+      if (expanded === a.id) {
+        setExpanded(null);
+        return;
+      }
+      setExpanded(a.id);
+      if (!drill[a.id]?.rows) {
+        loadDestinations(a);
+      }
+    },
+    [expanded, drill, loadDestinations],
+  );
 
   const resolve = async (id: string) => {
     setResolvingIds((prev) => new Set(prev).add(id));
@@ -170,6 +256,7 @@ export function AttacksPanel() {
               </CardTitle>
               <CardDescription className="text-xs">
                 Only hostile patterns (port scan / brute-force). CDN / normal browsing is filtered out.
+                Click a row to see exactly where the user knocked, from which node and when.
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
@@ -227,43 +314,72 @@ export function AttacksPanel() {
                     const shownUser = a.username && a.username !== a.user_email
                       ? `${a.username}  ·  #${a.user_email}`
                       : `#${a.user_email}`;
+                    const isOpen = expanded === a.id;
+                    const d = drill[a.id];
                     return (
-                      <TableRow key={a.id}>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {formatDistanceToNow(new Date(a.detected_at), { addSuffix: true })}
-                        </TableCell>
-                        <TableCell>
-                          <span className="inline-flex items-center gap-1.5 text-xs">
-                            {t.icon}
-                            {t.label}
-                          </span>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">
-                          <Link
-                            href={`/users/${encodeURIComponent(a.user_email)}`}
-                            className="hover:underline text-primary"
-                          >
-                            {shownUser}
-                          </Link>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{target}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={severityBadge[a.severity] ?? ""}>
-                            {a.severity}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={resolvingIds.has(a.id)}
-                            onClick={() => resolve(a.id)}
-                            className="h-7 px-2"
-                          >
-                            <Check className="h-3.5 w-3.5" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
+                      <Fragment key={a.id}>
+                        <TableRow
+                          className="cursor-pointer"
+                          onClick={() => toggleRow(a)}
+                          data-state={isOpen ? "selected" : undefined}
+                        >
+                          <TableCell className="text-xs text-muted-foreground">
+                            {formatDistanceToNow(new Date(a.detected_at), { addSuffix: true })}
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center gap-1.5 text-xs">
+                              {t.icon}
+                              {t.label}
+                            </span>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <Link
+                              href={`/users/${encodeURIComponent(a.user_email)}`}
+                              className="hover:underline text-primary"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {shownUser}
+                            </Link>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <span className="inline-flex items-center gap-1">
+                              {isOpen ? (
+                                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                              {target}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className={severityBadge[a.severity] ?? ""}>
+                              {a.severity}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={resolvingIds.has(a.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                resolve(a.id);
+                              }}
+                              className="h-7 px-2"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+
+                        {isOpen && (
+                          <TableRow className="hover:bg-transparent">
+                            <TableCell colSpan={6} className="bg-muted/30 p-0">
+                              <DestinationsDrill state={d} onRetry={() => loadDestinations(a)} />
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
                     );
                   })}
                 </TableBody>
@@ -272,6 +388,87 @@ export function AttacksPanel() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// DestinationsDrill renders the per-destination breakdown for one attack:
+// node, exact destination, hit count and first/last-seen times, with copy.
+function DestinationsDrill({ state, onRetry }: { state?: DrillState; onRetry: () => void }) {
+  if (!state || state.loading) {
+    return (
+      <div className="p-4 space-y-2">
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    );
+  }
+  if (state.error) {
+    return (
+      <div className="p-4 text-xs text-muted-foreground flex items-center gap-3">
+        Failed to load destinations.
+        <Button variant="outline" size="sm" className="h-7" onClick={onRetry}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+  const rows = state.rows ?? [];
+  if (rows.length === 0) {
+    return (
+      <div className="p-4 text-xs text-muted-foreground">
+        No matching destinations are retained for this attack&apos;s window (raw log lines aren&apos;t stored;
+        aggregated destinations may have expired).
+      </div>
+    );
+  }
+
+  // Plain-text dump for "Copy all" — tab-separated so it pastes cleanly.
+  const allText = rows
+    .map((r) => `${r.destination}\t${r.node_id}\t×${r.request_count}\t${fmtTs(r.first_seen)} → ${fmtTs(r.last_seen)}`)
+    .join("\n");
+
+  return (
+    <div className="p-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          {rows.length} destination{rows.length === 1 ? "" : "s"} hit during the detection window
+        </span>
+        <CopyButton text={allText} label="Copy all" className="border" />
+      </div>
+      <div className="max-h-72 overflow-auto rounded-md border bg-background">
+        <table className="w-full text-xs">
+          <thead className="sticky top-0 bg-muted/60 backdrop-blur">
+            <tr className="text-left text-muted-foreground">
+              <th className="px-2 py-1.5 font-medium">Destination</th>
+              <th className="px-2 py-1.5 font-medium w-[140px]">Node</th>
+              <th className="px-2 py-1.5 font-medium w-[70px] text-right">Hits</th>
+              <th className="px-2 py-1.5 font-medium w-[150px]">First seen</th>
+              <th className="px-2 py-1.5 font-medium w-[150px]">Last seen</th>
+              <th className="px-2 py-1.5 w-[40px]"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={`${r.node_id}-${r.destination}-${i}`} className="border-t hover:bg-muted/40">
+                <td className="px-2 py-1.5 font-mono">{r.destination}</td>
+                <td className="px-2 py-1.5">
+                  <span className="inline-flex items-center gap-1 text-muted-foreground">
+                    <Server className="h-3 w-3" />
+                    {r.node_id}
+                  </span>
+                </td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{r.request_count}</td>
+                <td className="px-2 py-1.5 font-mono text-muted-foreground">{fmtTs(r.first_seen)}</td>
+                <td className="px-2 py-1.5 font-mono text-muted-foreground">{fmtTs(r.last_seen)}</td>
+                <td className="px-2 py-1.5 text-right">
+                  <CopyButton text={r.destination} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

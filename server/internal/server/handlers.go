@@ -1793,6 +1793,66 @@ func (s *Server) handleAttackAnomalies(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleAttackDestinations is the drill-down behind one row in the Attacks tab.
+// It returns the concrete destinations that triggered the detection — which
+// exit node the request left from, the exact IP:port / host:port that was hit,
+// how many times, and when it was first/last seen — scoped to the detection
+// window. Raw log lines aren't stored, so this aggregated per-destination
+// breakdown is the closest evidence to the original log.
+//
+// Query params:
+//   user_email  required — Remnawave UUID (the attack row's user_email)
+//   port        optional — destination port filter
+//   subnet      optional — "A.B.0.0/16" for port-scan rows
+//   detected_at optional — RFC3339; defaults to now
+//   window      optional — window minutes (default 60)
+//   limit       optional — 1..2000 (default 500)
+func (s *Server) handleAttackDestinations(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	userEmail := strings.TrimSpace(q.Get("user_email"))
+	if userEmail == "" {
+		http.Error(w, "user_email required", http.StatusBadRequest)
+		return
+	}
+	port := strings.TrimSpace(q.Get("port"))
+	subnet := strings.TrimSpace(q.Get("subnet"))
+
+	detectedAt := time.Now()
+	if v := q.Get("detected_at"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			detectedAt = t
+		}
+	}
+	window := 60
+	if v := q.Get("window"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			window = n
+		}
+	}
+	limit := 500
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+
+	dests, err := s.storage.GetAttackDestinations(r.Context(), userEmail, port, subnet, detectedAt, window, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if dests == nil {
+		dests = []models.UserDestination{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"count":        len(dests),
+		"destinations": dests,
+	})
+}
+
 // handleOnlineHistory returns hourly peak online-user counts for the chart.
 // Backed by online_snapshots (written by startOnlineSnapshotJob every minute
 // from Remnawave users_online). Unlike hourly_stats this doesn't dip when

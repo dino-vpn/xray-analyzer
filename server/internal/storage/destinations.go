@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -146,6 +147,86 @@ func (s *Storage) GetUserDestinations(ctx context.Context, userEmail string, sin
 		PageSize:     pageSize,
 		TotalPages:   totalPages,
 	}, nil
+}
+
+// GetAttackDestinations returns the concrete destinations that make up an
+// attack anomaly — the drill-down behind one row in the Attacks tab. For each
+// destination it reports which exit node the request left from, the exact
+// IP:port / host:port that was hit, how many times, and the first/last time it
+// was seen, scoped to the attack's detection window.
+//
+// Raw log lines are not persisted (the analyzer aggregates and discards them),
+// so this per-destination breakdown is the most granular evidence available.
+//
+// port    optional — restrict to a destination port (abuse_port_flood / scans).
+// subnet  optional — "A.B.0.0/16" CIDR to restrict to a single /16 (port_scan).
+// windowMinutes — lookback from detectedAt; mirrors the detector's window.
+func (s *Storage) GetAttackDestinations(ctx context.Context, userEmail, port, subnet string, detectedAt time.Time, windowMinutes, limit int) ([]models.UserDestination, error) {
+	if limit <= 0 || limit > 2000 {
+		limit = 500
+	}
+	if windowMinutes <= 0 {
+		windowMinutes = 60
+	}
+
+	searchUUIDs := s.buildDestSearchUUIDs(ctx, userEmail)
+	if len(searchUUIDs) == 0 {
+		return []models.UserDestination{}, nil
+	}
+
+	cutoff := detectedAt.Add(-time.Duration(windowMinutes) * time.Minute).UTC()
+
+	// Mirror the detectors' window: they group on last_seen > cutoff, so the
+	// same predicate reconstructs the destinations that triggered the anomaly.
+	args := []any{searchUUIDs, cutoff}
+	where := []string{"ud.user_email = ANY($1)", "ud.last_seen > $2"}
+
+	if port != "" {
+		args = append(args, port)
+		where = append(where, fmt.Sprintf(
+			"SUBSTRING(ud.destination, POSITION(':' IN ud.destination) + 1) = $%d", len(args)))
+	}
+	if subnet != "" {
+		// "A.B.0.0/16" -> prefix "A.B." so only that /16 matches. The trailing
+		// dot prevents "1.2." from also matching "1.20.x".
+		base := subnet
+		if i := strings.IndexByte(base, '/'); i >= 0 {
+			base = base[:i]
+		}
+		if parts := strings.Split(base, "."); len(parts) >= 2 {
+			args = append(args, parts[0]+"."+parts[1]+".%")
+			where = append(where, fmt.Sprintf("ud.destination LIKE $%d", len(args)))
+		}
+	}
+
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+		SELECT n.node_id, ud.destination, ud.request_count, ud.first_seen, ud.last_seen
+		FROM user_destinations ud
+		JOIN nodes n ON n.id = ud.node_id
+		WHERE %s
+		ORDER BY ud.last_seen DESC, ud.request_count DESC
+		LIMIT $%d
+	`, strings.Join(where, " AND "), len(args))
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	destinations := []models.UserDestination{}
+	for rows.Next() {
+		var d models.UserDestination
+		if err := rows.Scan(&d.NodeID, &d.Destination, &d.RequestCount, &d.FirstSeen, &d.LastSeen); err != nil {
+			return nil, err
+		}
+		destinations = append(destinations, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return destinations, nil
 }
 
 // CleanupUserDestinations removes old destination records.
