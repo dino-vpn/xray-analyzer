@@ -7,6 +7,36 @@ import (
 	"github.com/google/uuid"
 )
 
+// UserResolver resolves a numeric xray-email id (e.g. "791947") to a Remnawave
+// user UUID on demand, fetching from the panel and persisting into remna_users
+// when the id isn't cached. Implemented by *remnawave.SyncService and wired in
+// via SetUserResolver. Kept as a local interface so storage doesn't import the
+// remnawave package (the dependency runs the other way).
+type UserResolver interface {
+	ResolveNumericID(ctx context.Context, id string) (string, bool)
+}
+
+// SetUserResolver wires the on-demand numeric-id resolver used by
+// ResolveUserEmailToUUID step 3d. Safe to leave nil (falls back to the SHA-1
+// derivation, preserving pre-resolver behaviour).
+func (s *Storage) SetUserResolver(r UserResolver) {
+	s.userResolver = r
+}
+
+// cacheResolvedEmail stores a positive email→uuid mapping, clearing the cache
+// wholesale if it grows past the cap (entries are cheap to re-resolve).
+func (s *Storage) cacheResolvedEmail(email string, id uuid.UUID) {
+	if s.userUUIDCache == nil {
+		return
+	}
+	s.userUUIDCacheMu.Lock()
+	if len(s.userUUIDCache) >= userUUIDCacheMax {
+		s.userUUIDCache = make(map[string]uuid.UUID)
+	}
+	s.userUUIDCache[email] = id
+	s.userUUIDCacheMu.Unlock()
+}
+
 // ResolveUserEmailToUUID converts a raw xray user_email identifier into a
 // Remnawave user UUID for storage. Resolution order:
 //  1. If the input is already a valid UUID, returns it unchanged.
@@ -28,6 +58,17 @@ func (s *Storage) ResolveUserEmailToUUID(ctx context.Context, email string) (uui
 		return id, nil
 	}
 
+	// Step 1b: positive in-memory cache (raw email → resolved UUID). Avoids a
+	// DB round-trip per write for hot users; mirrors nodeIDCache.
+	if s.userUUIDCache != nil {
+		s.userUUIDCacheMu.RLock()
+		cached, ok := s.userUUIDCache[email]
+		s.userUUIDCacheMu.RUnlock()
+		if ok {
+			return cached, nil
+		}
+	}
+
 	// Step 2: direct match by username or email in remna_users.
 	var idStr string
 	err := s.db.QueryRowContext(ctx, `
@@ -35,6 +76,7 @@ func (s *Storage) ResolveUserEmailToUUID(ctx context.Context, email string) (uui
 	`, email).Scan(&idStr)
 	if err == nil && idStr != "" {
 		if id, perr := uuid.Parse(idStr); perr == nil {
+			s.cacheResolvedEmail(email, id)
 			return id, nil
 		}
 	}
@@ -70,6 +112,20 @@ func (s *Storage) ResolveUserEmailToUUID(ctx context.Context, email string) (uui
 		if err == nil && idStr != "" {
 			if id, perr := uuid.Parse(idStr); perr == nil {
 				return id, nil
+			}
+		}
+
+		// 3d: on-demand resolve. remna_users no longer holds the full fleet
+		// (the per-minute bulk sweep was dropped because it 500'd the panel),
+		// so an id missing above is the common case for an active user. Ask the
+		// resolver to fetch+persist this single user, then it's joinable here
+		// and on the dashboard. The resolver caches positives and negatives so
+		// this isn't a per-write API/DB hit.
+		if s.userResolver != nil {
+			if uuidStr, ok := s.userResolver.ResolveNumericID(ctx, email); ok {
+				if id, perr := uuid.Parse(uuidStr); perr == nil {
+					return id, nil
+				}
 			}
 		}
 	}

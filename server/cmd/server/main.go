@@ -210,16 +210,20 @@ func main() {
 	var remnaClient *remnawave.Client
 	if cfg.RemnawaveEnabled && cfg.RemnawaveURL != "" && cfg.RemnawaveAPIToken != "" {
 		remnaClient = remnawave.NewClient(cfg.RemnawaveURL, cfg.RemnawaveAPIToken)
-		remnaSvc = remnawave.NewSyncService(remnaClient, cfg.RemnawaveSyncInterval)
+		remnaSvc = remnawave.NewSyncService(remnaClient, cfg.RemnawaveSyncInterval, cfg.RemnawaveFullSyncInterval)
 		remnaSvc.SetIDCacheRedis(redisClient)
 		remnaSvc.SetStorage(store) // Persist data to SQLite
+		// On-demand numeric-id → UUID resolution for the per-write storage path,
+		// so users missing from the (now infrequent) full sweep still map to a
+		// real username instead of a synthetic hash.
+		store.SetUserResolver(remnaSvc)
 		// Warm cache after each sync for fast page loads
 		remnaSvc.OnSyncComplete(func() {
 			store.WarmCache(ctx)
 		})
 		srv.SetRemnawave(remnaSvc)
 		go remnaSvc.Start(ctx)
-		log.Printf("remnawave: enabled, sync interval: %v, storage: enabled", cfg.RemnawaveSyncInterval)
+		log.Printf("remnawave: enabled, node sync: %v, full sync: %v, storage: enabled", cfg.RemnawaveSyncInterval, cfg.RemnawaveFullSyncInterval)
 	} else {
 		log.Println("remnawave: disabled (no URL/token configured)")
 	}

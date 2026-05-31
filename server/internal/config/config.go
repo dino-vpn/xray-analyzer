@@ -37,7 +37,11 @@ type Config struct {
 	RemnawaveEnabled      bool
 	RemnawaveURL          string
 	RemnawaveAPIToken     string
-	RemnawaveSyncInterval time.Duration // Interval for syncing data from Remnawave
+	RemnawaveSyncInterval time.Duration // Interval for the light node sync (online counts)
+	// RemnawaveFullSyncInterval bounds the heavy full user+hwid sweep. The
+	// per-minute full sweep 500'd the panel (A024) and left remna_users empty;
+	// numeric ids are resolved on-demand between full sweeps instead.
+	RemnawaveFullSyncInterval time.Duration
 
 	// AI assistant settings — OpenAI-compatible chat-completions endpoint.
 	// Works with OpenAI, Aleria, Together, OpenRouter, local llama.cpp/vLLM.
@@ -96,7 +100,8 @@ func Load() *Config {
 		RemnawaveEnabled:       getBoolEnv("REMNAWAVE_ENABLED", false),
 		RemnawaveURL:           getEnv("REMNAWAVE_URL", ""),
 		RemnawaveAPIToken:      getEnv("REMNAWAVE_API_TOKEN", ""),
-		RemnawaveSyncInterval:  getDurationEnv("REMNAWAVE_SYNC_INTERVAL", 1*time.Minute), // More frequent for accurate online stats
+		RemnawaveSyncInterval:     getDurationEnv("REMNAWAVE_SYNC_INTERVAL", 1*time.Minute),      // light node sync (online stats)
+		RemnawaveFullSyncInterval: getDurationEnv("REMNAWAVE_FULL_SYNC_INTERVAL", 6*time.Hour), // heavy full user+hwid sweep
 		// OPENAI_* are the canonical env names; ALERIA_API_KEY is kept as
 		// a back-compat fallback so existing deployments don't break.
 		OpenAIAPIKey:           getEnv("OPENAI_API_KEY", getEnv("ALERIA_API_KEY", "")),
