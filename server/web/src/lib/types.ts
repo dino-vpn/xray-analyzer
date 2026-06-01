@@ -42,6 +42,7 @@ export interface HourlyStats {
 
 export interface UserDetails {
   user_email: string;
+  uuid?: string;
   display_name?: string;
   total_requests: number;
   total_blacklist_hits: number;
@@ -78,12 +79,38 @@ export interface UserThreatInfo {
 
 export interface UserNodeStats {
   node_id: string;
+  node_name?: string;
   total_requests: number;
   blacklist_hits: number;
   unique_destinations: number;
   last_seen: string;
   last_blacklist_hit?: string;
   last_blacklist_domain?: string;
+}
+
+// One normalized row of the unified per-user event log (/api/users/{email}/logs).
+export type UserLogKind = "threat" | "blacklist" | "anomaly";
+
+export interface UserLogEvent {
+  ts: string;
+  kind: UserLogKind;
+  category: string;
+  source_ip: string;
+  destination: string;
+  node_id: string;
+  node_name: string;
+  source: string;
+  severity: string;
+  confidence: number;
+  description: string;
+}
+
+export interface UserLogsResponse {
+  events: UserLogEvent[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 }
 
 export interface UserIPHistory {

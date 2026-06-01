@@ -105,6 +105,7 @@ type HourlyStats struct {
 // UserDetails represents detailed info about a user
 type UserDetails struct {
 	UserEmail          string               `json:"user_email"`
+	UUID               string               `json:"uuid,omitempty"` // canonical analyzer user_email UUID (for enforcement/detections)
 	DisplayName        string               `json:"display_name,omitempty"`
 	TotalRequests      int64                `json:"total_requests"`
 	TotalBlacklistHits int64                `json:"total_blacklist_hits"`
@@ -155,12 +156,38 @@ type PaginatedUserThreatsResponse struct {
 // UserNodeStats represents user stats per node
 type UserNodeStats struct {
 	NodeID              string    `json:"node_id"`
+	NodeName            string    `json:"node_name"`
 	TotalRequests       int64     `json:"total_requests"`
 	BlacklistHits       int64     `json:"blacklist_hits"`
 	UniqueDestinations  int       `json:"unique_destinations"`
 	LastSeen            time.Time `json:"last_seen"`
 	LastBlacklistHit    time.Time `json:"last_blacklist_hit,omitempty"`
 	LastBlacklistDomain string    `json:"last_blacklist_domain,omitempty"`
+}
+
+// UserLogEvent is one normalized row of the unified per-user event log,
+// merged from threat_matches, blacklist_matches and anomalies.
+type UserLogEvent struct {
+	TS          time.Time `json:"ts"`
+	Kind        string    `json:"kind"`     // threat|blacklist|anomaly
+	Category    string    `json:"category"` // threat_type | matched_rule | anomaly type
+	SourceIP    string    `json:"source_ip"`
+	Destination string    `json:"destination"`
+	NodeID      string    `json:"node_id"`   // analyzer text node id ("est-1")
+	NodeName    string    `json:"node_name"` // friendly name via NodeRemnaMap, falls back to NodeID
+	Source      string    `json:"source"`    // threat feed source (threat kind only)
+	Severity    string    `json:"severity"`  // anomaly severity (anomaly kind only)
+	Confidence  int       `json:"confidence"`
+	Description string    `json:"description"`
+}
+
+// UserLogsResponse is the paginated envelope for the unified event log.
+type UserLogsResponse struct {
+	Events     []UserLogEvent `json:"events"`
+	Total      int            `json:"total"`
+	Page       int            `json:"page"`
+	PageSize   int            `json:"page_size"`
+	TotalPages int            `json:"total_pages"`
 }
 
 // BlacklistMatchInfo represents a blacklist match for display

@@ -451,15 +451,24 @@ func (s *Storage) GetUserDetails(ctx context.Context, userEmail string) (*models
 		searchUUIDs = append(searchUUIDs, u)
 	}
 
-	// Per-node user stats
+	// Expose the canonical UUID so the UI can drive enforcement/detections
+	// endpoints (which key on user_email uuid) even when the page was reached
+	// via a username or numeric id.
+	if len(searchUUIDs) > 0 {
+		user.UUID = searchUUIDs[0].String()
+	}
+
+	// Per-node user stats. Resolve the smallint FK to the text node_id via the
+	// nodes lookup so the UI shows a node identifier instead of a raw number.
 	nodeRows, err := s.pool.Query(ctx, `
-		SELECT node_id, total_requests, blacklist_hits, unique_destinations,
-			   last_seen,
-			   last_blacklist_hit,
-			   COALESCE(last_blacklist_domain, '') as last_blacklist_domain
-		FROM user_stats
-		WHERE user_email = ANY($1)
-		ORDER BY total_requests DESC
+		SELECT n.node_id, us.total_requests, us.blacklist_hits, us.unique_destinations,
+			   us.last_seen,
+			   us.last_blacklist_hit,
+			   COALESCE(us.last_blacklist_domain, '') as last_blacklist_domain
+		FROM user_stats us
+		JOIN nodes n ON n.id = us.node_id
+		WHERE us.user_email = ANY($1)
+		ORDER BY us.total_requests DESC
 	`, searchUUIDs)
 	if err != nil {
 		return nil, err
@@ -473,6 +482,7 @@ func (s *Storage) GetUserDetails(ctx context.Context, userEmail string) (*models
 			&lastSeen, &lastHit, &ns.LastBlacklistDomain); err != nil {
 			return nil, err
 		}
+		ns.NodeName = s.nodeName(ns.NodeID)
 		if lastSeen != nil {
 			ns.LastSeen = *lastSeen
 		}

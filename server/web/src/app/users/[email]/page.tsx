@@ -15,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ArrowLeft, User, Activity, ShieldAlert, Globe, Wifi, AlertTriangle, Gauge } from "lucide-react";
+import { ArrowLeft, User, Activity, ShieldAlert, Globe, Wifi, AlertTriangle, Gauge, ScrollText, ShieldBan } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { formatDistanceToNow } from "date-fns";
 import { isValidDate } from "@/lib/utils/date";
@@ -23,6 +23,8 @@ import { UserDestinationsTable } from "@/components/users/user-destinations-tabl
 import { UserBlacklistMatches } from "@/components/users/user-blacklist-matches";
 import { UserIPHistoryTable } from "@/components/users/user-ip-history";
 import { UserThreatsTable } from "@/components/users/user-threats-table";
+import { UserLogsTable } from "@/components/users/user-logs-table";
+import { EnforcementDrill } from "@/components/threatintel/enforcement-drill";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export default function UserDetailsPage() {
@@ -159,6 +161,20 @@ export default function UserDetailsPage() {
         </Card>
       </div>
 
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList className="flex flex-wrap h-auto justify-start gap-1">
+          <TabsTrigger value="overview" className="gap-1.5">
+            <Activity className="h-4 w-4" /> Обзор
+          </TabsTrigger>
+          <TabsTrigger value="logs" className="gap-1.5">
+            <ScrollText className="h-4 w-4" /> Логи
+          </TabsTrigger>
+          <TabsTrigger value="enforcement" className="gap-1.5">
+            <ShieldBan className="h-4 w-4" /> Обнаружения и наказания
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-6 mt-6">
       {details.threats_by_type && Object.keys(details.threats_by_type).length > 0 && (() => {
         // Tab labels + counts come from threats_by_type (full aggregate).
         // The detail rows for the active tab are loaded paginated by
@@ -219,7 +235,7 @@ export default function UserDetailsPage() {
               {details.nodes.map((node) => (
                 <TableRow key={node.node_id}>
                   <TableCell>
-                    <Badge variant="outline" className="whitespace-nowrap">{node.node_id}</Badge>
+                    <Badge variant="outline" className="whitespace-nowrap">{node.node_name || node.node_id}</Badge>
                   </TableCell>
                   <TableCell className="text-right">
                     {node.total_requests.toLocaleString()}
@@ -282,6 +298,42 @@ export default function UserDetailsPage() {
           <UserBlacklistMatches email={email} />
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="logs" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                <ScrollText className="h-4 w-4" />
+                Логи юзера
+              </CardTitle>
+              <CardDescription className="text-xs sm:text-sm">
+                Единая лента событий (угрозы, блок-лист, аномалии). Фильтр по времени и типу, поиск по IP или домену, сортировка по колонкам и выгрузка в CSV.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <UserLogsTable email={email} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="enforcement" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                <ShieldBan className="h-4 w-4" />
+                Обнаружения и наказания
+              </CardTitle>
+              <CardDescription className="text-xs sm:text-sm">
+                История обнаружений, активные баны и журнал наказаний. Бан IP через CrowdSec, снятие бана, отключение и удаление юзера в Remnawave.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <EnforcementDrill userEmail={details.uuid || details.user_email} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

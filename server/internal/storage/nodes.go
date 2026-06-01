@@ -193,6 +193,16 @@ func (s *Storage) GetNodeStats(ctx context.Context) ([]*models.NodeStats, error)
 	return nodes, nil
 }
 
+// nodeName maps an analyzer text node_id ("est-1") to its friendly Remnawave
+// name ("Estonia") via NodeRemnaMap, falling back to the node_id itself when no
+// mapping is configured.
+func (s *Storage) nodeName(nodeID string) string {
+	if name, ok := s.nodeRemnaMap[nodeID]; ok && name != "" {
+		return name
+	}
+	return nodeID
+}
+
 // remnaOnlineCounts returns a map of remnawave-node-name → users_online
 // from the synced remna_nodes table. Fast, indexed, read-only.
 func (s *Storage) remnaOnlineCounts(ctx context.Context) (map[string]int, error) {

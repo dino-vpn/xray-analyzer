@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -32,7 +33,9 @@ type cachedResponse struct {
 // If Redis is nil the wrapper degrades gracefully to a passthrough.
 func (s *Server) cached(ttl time.Duration, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || s.redis == nil {
+		// File downloads (e.g. /logs/export) must always run fresh and must not
+		// be buffered into Redis — bypass the cache entirely.
+		if r.Method != http.MethodGet || s.redis == nil || strings.HasSuffix(r.URL.Path, "/export") {
 			h(w, r)
 			return
 		}

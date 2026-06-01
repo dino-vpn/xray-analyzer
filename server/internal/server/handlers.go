@@ -194,6 +194,18 @@ func (s *Server) handleUserRouter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for /api/users/{email}/logs/export (must precede the /logs check)
+	if strings.HasSuffix(path, "/logs/export") {
+		s.handleUserLogsExport(w, r)
+		return
+	}
+
+	// Check for /api/users/{email}/logs
+	if strings.HasSuffix(path, "/logs") {
+		s.handleUserLogs(w, r)
+		return
+	}
+
 	// Default: user details
 	s.handleUserDetails(w, r)
 }
