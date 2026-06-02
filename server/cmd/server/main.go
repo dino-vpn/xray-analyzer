@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"log"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/xray-log-analyzer/server/internal/aleria"
 	"github.com/xray-log-analyzer/server/internal/analyzer"
+	"github.com/xray-log-analyzer/server/internal/auth"
 	"github.com/xray-log-analyzer/server/internal/blacklist"
 	"github.com/xray-log-analyzer/server/internal/config"
 	"github.com/xray-log-analyzer/server/internal/correlation"
@@ -192,8 +195,40 @@ func main() {
 		log.Println("server: HTTP response cache enabled (Redis L2, TTL=10s)")
 	}
 
+	// OIDC (PocketID) browser login with group-based access. Initialized before
+	// the auth-status logging so we can report it accurately.
+	if cfg.OIDCEnabled {
+		secret := cfg.SessionSecret
+		if secret == "" {
+			b := make([]byte, 32)
+			if _, err := rand.Read(b); err != nil {
+				log.Fatalf("auth: failed to generate session secret: %v", err)
+			}
+			secret = base64.RawURLEncoding.EncodeToString(b)
+			log.Println("auth: WARNING - no SESSION_SECRET set, generated a random one (sessions will not survive a restart)")
+		}
+		oidcAuth, err := auth.New(ctx, auth.Config{
+			IssuerURL:     cfg.OIDCIssuerURL,
+			ClientID:      cfg.OIDCClientID,
+			ClientSecret:  cfg.OIDCClientSecret,
+			RedirectURL:   cfg.OIDCRedirectURL,
+			AllowedGroup:  cfg.OIDCAllowedGroup,
+			GroupsClaim:   cfg.OIDCGroupsClaim,
+			Scopes:        cfg.OIDCScopes,
+			SessionSecret: []byte(secret),
+			SessionTTL:    cfg.SessionTTL,
+		})
+		if err != nil {
+			log.Fatalf("auth: OIDC init failed: %v", err)
+		}
+		srv.SetOIDC(oidcAuth)
+		log.Printf("auth: OIDC login enabled (issuer=%s, allowed group=%q)", cfg.OIDCIssuerURL, cfg.OIDCAllowedGroup)
+	}
+
 	if cfg.APIToken != "" {
 		log.Println("auth: API token authentication enabled")
+	} else if cfg.OIDCEnabled {
+		log.Println("auth: no API_TOKEN set (OIDC handles browser auth; set API_TOKEN only for service/curl access)")
 	} else {
 		log.Println("auth: WARNING - no API_TOKEN set, API is unprotected!")
 	}

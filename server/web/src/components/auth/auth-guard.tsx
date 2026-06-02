@@ -9,16 +9,21 @@ interface AuthGuardProps {
   children: ReactNode;
 }
 
+// Routes reachable without an established session: the login page and the
+// OIDC callback (which establishes the session from the URL fragment).
+const PUBLIC_PATHS = ["/login", "/auth/callback"];
+
 export function AuthGuard({ children }: AuthGuardProps) {
   const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const isPublic = PUBLIC_PATHS.includes(pathname);
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated && pathname !== "/login") {
+    if (!isLoading && !isAuthenticated && !isPublic) {
       router.replace("/login");
     }
-  }, [isAuthenticated, isLoading, pathname, router]);
+  }, [isAuthenticated, isLoading, isPublic, router]);
 
   // Show loading spinner while checking auth
   if (isLoading) {
@@ -29,8 +34,8 @@ export function AuthGuard({ children }: AuthGuardProps) {
     );
   }
 
-  // Allow login page without auth
-  if (pathname === "/login") {
+  // Allow public routes (login / OIDC callback) without auth
+  if (isPublic) {
     return <>{children}</>;
   }
 

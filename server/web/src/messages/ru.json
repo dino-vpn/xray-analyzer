@@ -49,7 +49,13 @@
     "submit": "Войти",
     "submitting": "Проверка...",
     "errorInvalidToken": "Неверный токен",
-    "errorConnection": "Ошибка подключения к серверу"
+    "errorConnection": "Ошибка подключения к серверу",
+    "oidcDescription": "Войдите через аккаунт организации",
+    "oidcButton": "Войти через PocketID",
+    "loadingProvider": "Загрузка...",
+    "errorForbidden": "Ваш аккаунт не состоит в группе, которой разрешён доступ к панели.",
+    "errorAuth": "Не удалось войти. Попробуйте ещё раз.",
+    "errorSession": "Сессия входа истекла. Попробуйте ещё раз."
   },
   "dashboard": {
     "title": "Дашборд",

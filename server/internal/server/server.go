@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/xray-log-analyzer/server/internal/aleria"
 	"github.com/xray-log-analyzer/server/internal/analyzer"
+	"github.com/xray-log-analyzer/server/internal/auth"
 	"github.com/xray-log-analyzer/server/internal/blacklist"
 	"github.com/xray-log-analyzer/server/internal/correlation"
 	"github.com/xray-log-analyzer/server/internal/crowdsec"
@@ -26,8 +28,9 @@ import (
 type Server struct {
 	addr           string
 	allowedOrigins []string
-	apiToken       string // Bearer token for API/dashboard (empty = no auth)
-	agentToken     string // Token for agent WebSocket (empty = no auth)
+	apiToken       string              // Bearer token for API/dashboard (empty = no auth)
+	agentToken     string              // Token for agent WebSocket (empty = no auth)
+	oidc           *auth.Authenticator // OIDC (PocketID) login; nil = disabled
 	analyzer       *analyzer.Analyzer
 	storage        *storage.Storage
 	blacklist      *blacklist.Blacklist
@@ -95,6 +98,13 @@ func New(addr string, allowedOrigins []string, apiToken, agentToken string, anal
 	return s
 }
 
+// SetOIDC wires the OIDC authenticator. When set, browser requests are
+// authorized via app session tokens (in addition to the optional static
+// API_TOKEN), and the /api/auth/* routes become active.
+func (s *Server) SetOIDC(a *auth.Authenticator) {
+	s.oidc = a
+}
+
 // SetThreatIntel sets the threat intelligence service
 func (s *Server) SetThreatIntel(ti *threatintel.Service) {
 	s.threatIntel = ti
@@ -136,10 +146,14 @@ func (s *Server) SetRedis(r *rediscache.Client, ttl time.Duration) {
 	s.cacheTTL = ttl
 }
 
-// requireAPIToken wraps a handler with Bearer token authentication
+// requireAPIToken wraps a handler with browser/API authentication. A request
+// is authorized if it carries a valid OIDC session token (minted after a
+// PocketID login + group check) OR the static API_TOKEN service token. When
+// neither OIDC nor API_TOKEN is configured the API is open (dev).
 func (s *Server) requireAPIToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.apiToken == "" {
+		// No auth configured at all → open (preserves the old dev behaviour).
+		if s.apiToken == "" && s.oidc == nil {
 			next(w, r)
 			return
 		}
@@ -149,11 +163,19 @@ func (s *Server) requireAPIToken(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		token := extractToken(r)
-		if token != s.apiToken {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		// Static service token (curl/scripts).
+		if s.apiToken != "" && token == s.apiToken {
+			next(w, r)
 			return
 		}
-		next(w, r)
+		// OIDC session token (browser users).
+		if s.oidc != nil {
+			if _, ok := s.oidc.ValidateSession(token); ok {
+				next(w, r)
+				return
+			}
+		}
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
 
@@ -195,6 +217,15 @@ func extractToken(r *http.Request) string {
 	return ""
 }
 
+// handleAuthConfig reports which login methods are available so the frontend
+// can render the right UI. Unauthenticated and cheap.
+func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{
+		"oidcEnabled": s.oidc != nil,
+	})
+}
+
 // Start starts the HTTP server
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
@@ -205,6 +236,19 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Health (no auth)
 	mux.HandleFunc("/health", s.handleHealth)
+
+	// Public auth config — lets the login page pick the right UI (PocketID
+	// button vs. token form) at runtime. Always registered, no auth.
+	mux.HandleFunc("/api/auth/config", s.handleAuthConfig)
+
+	// OIDC (PocketID) login flow. login/callback/logout are unauthenticated
+	// (they establish the session); /me requires a valid session.
+	if s.oidc != nil {
+		mux.HandleFunc("/api/auth/login", s.oidc.HandleLogin)
+		mux.HandleFunc("/api/auth/callback", s.oidc.HandleCallback)
+		mux.HandleFunc("/api/auth/logout", s.oidc.HandleLogout)
+		mux.HandleFunc("/api/auth/me", s.requireAPIToken(s.oidc.HandleMe))
+	}
 
 	// API endpoints (require API token)
 	mux.HandleFunc("/api/stats", s.cached(5*time.Second, s.requireAPIToken(s.handleStats)))

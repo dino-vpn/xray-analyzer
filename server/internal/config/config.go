@@ -19,6 +19,24 @@ type Config struct {
 	APIToken   string // Bearer token for API/dashboard access (empty = no auth)
 	AgentToken string // Token for agent WebSocket connections (empty = no auth)
 
+	// OIDC (PocketID) browser login with group-based access. When enabled,
+	// browser users authenticate via PocketID instead of pasting API_TOKEN;
+	// only members of OIDCAllowedGroup are allowed in. API_TOKEN remains valid
+	// as an optional static service token, AGENT_TOKEN is unaffected.
+	OIDCEnabled      bool
+	OIDCIssuerURL    string   // PocketID base URL (OIDC discovery root)
+	OIDCClientID     string   // OIDC client id
+	OIDCClientSecret string   // OIDC client secret (confidential client)
+	OIDCRedirectURL  string   // public URL of …/api/auth/callback
+	OIDCAllowedGroup string   // user must be in this group (empty = any authenticated user)
+	OIDCGroupsClaim  string   // claim carrying group membership (default "groups")
+	OIDCScopes       []string // OAuth2 scopes (default openid profile email groups)
+	// SessionSecret signs the app-issued session token (HS256). If empty while
+	// OIDC is enabled, a random secret is generated at startup (sessions won't
+	// survive a restart). SessionTTL bounds the session lifetime.
+	SessionSecret string
+	SessionTTL    time.Duration
+
 	// Analysis settings
 	BlacklistPath      string
 	BlacklistReload    time.Duration
@@ -90,27 +108,37 @@ type Config struct {
 // Load loads configuration from environment variables
 func Load() *Config {
 	return &Config{
-		ListenAddr:             getEnv("LISTEN_ADDR", ":8080"),
-		DBPath:                 getEnv("DB_PATH", "./data/analyzer.db"),
-		PostgresURL:            getEnv("POSTGRES_URL", "postgres://xray_analyzer:changeme@analyzer-postgres:5432/xray_analyzer?sslmode=disable"),
-		AllowedOrigins:         getStringSliceEnv("ALLOWED_ORIGINS", nil),
-		APIToken:               getEnv("API_TOKEN", ""),
-		AgentToken:             getEnv("AGENT_TOKEN", ""),
-		BlacklistPath:          getEnv("BLACKLIST_PATH", "./blacklist.txt"),
-		BlacklistReload:        getDurationEnv("BLACKLIST_RELOAD", 5*time.Minute),
-		BlacklistRemoteURL:     getEnv("BLACKLIST_REMOTE_URL", ""),
-		ThreatIntelEnabled:     getBoolEnv("THREATINTEL_ENABLED", true),
-		TelegramEnabled:        getBoolEnv("TELEGRAM_ENABLED", false),
-		TelegramToken:          getEnv("TELEGRAM_TOKEN", ""),
-		TelegramChatID:         getEnv("TELEGRAM_CHAT_ID", ""),
-		TelegramTopics:         getIntMapEnv("TELEGRAM_TOPICS", nil),
-		TelegramDefaultTopic:   getIntEnv("TELEGRAM_DEFAULT_TOPIC", 0),
-		SuspiciousRequestCount: getIntEnv("SUSPICIOUS_REQUEST_COUNT", 5),
-		SuspiciousTimeWindow:   getDurationEnv("SUSPICIOUS_TIME_WINDOW", 1*time.Hour),
-		RemnawaveEnabled:       getBoolEnv("REMNAWAVE_ENABLED", false),
-		RemnawaveURL:           getEnv("REMNAWAVE_URL", ""),
-		RemnawaveAPIToken:      getEnv("REMNAWAVE_API_TOKEN", ""),
-		RemnawaveSyncInterval:     getDurationEnv("REMNAWAVE_SYNC_INTERVAL", 1*time.Minute),      // light node sync (online stats)
+		ListenAddr:                getEnv("LISTEN_ADDR", ":8080"),
+		DBPath:                    getEnv("DB_PATH", "./data/analyzer.db"),
+		PostgresURL:               getEnv("POSTGRES_URL", "postgres://xray_analyzer:changeme@analyzer-postgres:5432/xray_analyzer?sslmode=disable"),
+		AllowedOrigins:            getStringSliceEnv("ALLOWED_ORIGINS", nil),
+		APIToken:                  getEnv("API_TOKEN", ""),
+		AgentToken:                getEnv("AGENT_TOKEN", ""),
+		OIDCEnabled:               getBoolEnv("OIDC_ENABLED", false),
+		OIDCIssuerURL:             getEnv("OIDC_ISSUER_URL", ""),
+		OIDCClientID:              getEnv("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:          getEnv("OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:           getEnv("OIDC_REDIRECT_URL", ""),
+		OIDCAllowedGroup:          getEnv("OIDC_ALLOWED_GROUP", ""),
+		OIDCGroupsClaim:           getEnv("OIDC_GROUPS_CLAIM", "groups"),
+		OIDCScopes:                getStringSliceEnv("OIDC_SCOPES", []string{"openid", "profile", "email", "groups"}),
+		SessionSecret:             getEnv("SESSION_SECRET", ""),
+		SessionTTL:                getDurationEnv("SESSION_TTL", 12*time.Hour),
+		BlacklistPath:             getEnv("BLACKLIST_PATH", "./blacklist.txt"),
+		BlacklistReload:           getDurationEnv("BLACKLIST_RELOAD", 5*time.Minute),
+		BlacklistRemoteURL:        getEnv("BLACKLIST_REMOTE_URL", ""),
+		ThreatIntelEnabled:        getBoolEnv("THREATINTEL_ENABLED", true),
+		TelegramEnabled:           getBoolEnv("TELEGRAM_ENABLED", false),
+		TelegramToken:             getEnv("TELEGRAM_TOKEN", ""),
+		TelegramChatID:            getEnv("TELEGRAM_CHAT_ID", ""),
+		TelegramTopics:            getIntMapEnv("TELEGRAM_TOPICS", nil),
+		TelegramDefaultTopic:      getIntEnv("TELEGRAM_DEFAULT_TOPIC", 0),
+		SuspiciousRequestCount:    getIntEnv("SUSPICIOUS_REQUEST_COUNT", 5),
+		SuspiciousTimeWindow:      getDurationEnv("SUSPICIOUS_TIME_WINDOW", 1*time.Hour),
+		RemnawaveEnabled:          getBoolEnv("REMNAWAVE_ENABLED", false),
+		RemnawaveURL:              getEnv("REMNAWAVE_URL", ""),
+		RemnawaveAPIToken:         getEnv("REMNAWAVE_API_TOKEN", ""),
+		RemnawaveSyncInterval:     getDurationEnv("REMNAWAVE_SYNC_INTERVAL", 1*time.Minute),    // light node sync (online stats)
 		RemnawaveFullSyncInterval: getDurationEnv("REMNAWAVE_FULL_SYNC_INTERVAL", 6*time.Hour), // heavy full user+hwid sweep
 		CrowdSecEnabled:           getBoolEnv("CROWDSEC_ENABLED", false),
 		CrowdSecURL:               getEnv("CROWDSEC_URL", ""),
@@ -119,12 +147,12 @@ func Load() *Config {
 		CrowdSecDefaultBan:        getDurationEnv("CROWDSEC_DEFAULT_BAN", 30*time.Minute),
 		// OPENAI_* are the canonical env names; ALERIA_API_KEY is kept as
 		// a back-compat fallback so existing deployments don't break.
-		OpenAIAPIKey:           getEnv("OPENAI_API_KEY", getEnv("ALERIA_API_KEY", "")),
-		OpenAIBaseURL:          getEnv("OPENAI_BASE_URL", ""),
-		OpenAIModel:            getEnv("OPENAI_MODEL", ""),
-		RedisAddr:               getEnv("REDIS_ADDR", ""),
-		RedisPassword:           getEnv("REDIS_PASSWORD", ""),
-		RedisKeyPrefix:          getEnv("REDIS_KEY_PREFIX", "analyzer:"),
+		OpenAIAPIKey:   getEnv("OPENAI_API_KEY", getEnv("ALERIA_API_KEY", "")),
+		OpenAIBaseURL:  getEnv("OPENAI_BASE_URL", ""),
+		OpenAIModel:    getEnv("OPENAI_MODEL", ""),
+		RedisAddr:      getEnv("REDIS_ADDR", ""),
+		RedisPassword:  getEnv("REDIS_PASSWORD", ""),
+		RedisKeyPrefix: getEnv("REDIS_KEY_PREFIX", "analyzer:"),
 		NodeRemnaMap: getMapEnv("NODE_REMNA_MAP", map[string]string{
 			"est-1":         "Estonia",
 			"poland-1":      "Poland",
